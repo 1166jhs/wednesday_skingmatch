@@ -1,12 +1,10 @@
 import html
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
 
 from src.data_loader import (
-    DEFAULT_PROFILE,
     load_ingredients,
     load_product_ingredients,
     load_products,
@@ -14,7 +12,6 @@ from src.data_loader import (
 )
 from src.recommender import (
     best_product_for_category,
-    ingredient_risk_breakdown,
     recommend_products,
     score_product,
 )
@@ -160,7 +157,6 @@ def inject_custom_css():
             margin-top: 0.35rem;
         }
 
-        /* Buttons */
         div.stButton > button {
             border-radius: 999px;
             border: 1px solid #d96c8c;
@@ -178,7 +174,6 @@ def inject_custom_css():
             transform: translateY(-1px);
         }
 
-        /* Make input boxes easier to see */
         .stTextInput input,
         .stTextArea textarea {
             background-color: #ffffff !important;
@@ -198,7 +193,6 @@ def inject_custom_css():
             min-height: 120px !important;
         }
 
-        /* Make dropdowns and multiselect boxes more visible */
         div[data-baseweb="select"] > div {
             background-color: #ffffff !important;
             border: 1.8px solid #dca7b8 !important;
@@ -228,7 +222,7 @@ def inject_custom_css():
             max-width: 100% !important;
         }
 
-        label, .stMarkdown, .stRadio, .stSelectbox, .stMultiSelect, .stTextInput, .stTextArea {
+        label, .stMarkdown, .stTabs, .stSelectbox, .stMultiSelect, .stTextInput, .stTextArea {
             color: #2f2f2f !important;
         }
 
@@ -237,10 +231,31 @@ def inject_custom_css():
             border-right: 1px solid #efd2dc;
         }
 
-        div[data-testid="stDataFrame"] {
-            border-radius: 16px;
-            overflow: hidden;
-            border: 1px solid #eee;
+        section[data-testid="stSidebar"] div.stButton > button {
+            background: transparent;
+            color: #2f2f2f;
+            border: 0;
+            box-shadow: none;
+            border-radius: 8px;
+            padding: 0.25rem 0;
+            font-weight: 500;
+            text-align: left;
+            justify-content: flex-start;
+        }
+
+        section[data-testid="stSidebar"] div.stButton > button:hover {
+            background: #fff0f4;
+            color: #d96c8c;
+            transform: none;
+            text-decoration: underline;
+        }
+
+        .nav-active {
+            color: #d96c8c;
+            font-weight: 800;
+            text-decoration: underline;
+            margin: 0.35rem 0 0.35rem 0;
+            padding: 0.25rem 0;
         }
 
         div[data-testid="stAlert"] {
@@ -312,7 +327,7 @@ def init_session_state():
         st.session_state.user_id = LOCAL_DEMO_USER
 
     if "user_email" not in st.session_state:
-        st.session_state.user_email = "Local demo user"
+        st.session_state.user_email = "Guest"
 
     if "use_cloud" not in st.session_state:
         st.session_state.use_cloud = False
@@ -325,6 +340,18 @@ def init_session_state():
 
     if "refresh_token" not in st.session_state:
         st.session_state.refresh_token = None
+
+    if "page" not in st.session_state:
+        st.session_state.page = "Home"
+
+    if "auth_view" not in st.session_state:
+        st.session_state.auth_view = "sign_in"
+
+    if "profile_edit_mode" not in st.session_state:
+        st.session_state.profile_edit_mode = True
+
+    if "profile_just_saved" not in st.session_state:
+        st.session_state.profile_just_saved = False
 
     cloud_client = st.session_state.supabase_client
 
@@ -343,13 +370,14 @@ def init_session_state():
             st.session_state.use_cloud = False
             st.session_state.is_authenticated = False
             st.session_state.user_id = LOCAL_DEMO_USER
-            st.session_state.user_email = "Local demo user"
+            st.session_state.user_email = "Guest"
+            st.session_state.access_token = None
+            st.session_state.refresh_token = None
 
 
 def current_user_id() -> str:
     if using_cloud():
         return st.session_state.user_id
-
     return LOCAL_DEMO_USER
 
 
@@ -366,22 +394,51 @@ def client():
     return st.session_state.get("supabase_client")
 
 
-def show_header():
-    st.markdown(
-        """
-        <div class="app-title">Wednesday Skinmatch</div>
+def load_current_profile() -> Dict:
+    return normalize_profile(
+        load_profile(
+            current_user_id(),
+            client=client(),
+            use_cloud=using_cloud(),
+        )
+    )
+
+
+def load_current_reactions() -> pd.DataFrame:
+    return load_reactions(
+        current_user_id(),
+        client=client(),
+        use_cloud=using_cloud(),
+    )
+
+
+def safe_text(value: object) -> str:
+    return html.escape(str(value))
+
+
+def show_header(show_subtitle: bool = True):
+    if show_subtitle:
+        subtitle = """
         <div class="subtitle">
             A Korean skincare matching prototype that uses skin profiles, ingredient notes,
             product comparison, and reaction history to make recommendations easier to understand.
         </div>
+        """
+    else:
+        subtitle = ""
+
+    st.markdown(
+        f"""
+        <div class="app-title">Wednesday Skinmatch</div>
+        {subtitle}
         """,
         unsafe_allow_html=True,
     )
 
 
 def card(title: str, body: str):
-    safe_title = html.escape(str(title))
-    safe_body = html.escape(str(body))
+    safe_title = safe_text(title)
+    safe_body = safe_text(body).replace("\n", "<br>")
 
     st.markdown(
         f"""
@@ -398,8 +455,8 @@ def score_card(score: int, label: str = "match score"):
     st.markdown(
         f"""
         <div class="score-box">
-            <div class="score-number">{score}/100</div>
-            <div class="score-label">{label}</div>
+            <div class="score-number">{int(score)}/100</div>
+            <div class="score-label">{safe_text(label)}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -414,19 +471,17 @@ def badge(text: str, badge_type: str = "neutral"):
         "neutral": "badge-neutral",
     }.get(badge_type, "badge-neutral")
 
-    safe_text = html.escape(str(text))
-
     st.markdown(
-        f'<span class="badge {class_name}">{safe_text}</span>',
+        f'<span class="badge {class_name}">{safe_text(text)}</span>',
         unsafe_allow_html=True,
     )
 
 
 def product_title(product: pd.Series):
-    brand = html.escape(str(product.get("brand", "")))
-    name = html.escape(str(product.get("name", "")))
-    category = html.escape(str(product.get("category", "Product")))
-    barcode = html.escape(str(product.get("barcode", "N/A")))
+    brand = safe_text(product.get("brand", ""))
+    name = safe_text(product.get("name", ""))
+    category = safe_text(product.get("category", "Product"))
+    barcode = safe_text(product.get("barcode", "N/A"))
 
     st.markdown(
         f"""
@@ -448,27 +503,136 @@ def get_product_options(products: pd.DataFrame) -> List[str]:
 
 def product_from_option(products: pd.DataFrame, option: str) -> pd.Series:
     brand, name = option.split(" - ", 1)
-    row = products[
+    return products[
         (products["brand"].astype(str) == brand)
         & (products["name"].astype(str) == name)
     ].iloc[0]
-    return row
 
 
-def load_current_profile() -> Dict:
-    return load_profile(
-        current_user_id(),
-        client=client(),
-        use_cloud=using_cloud(),
+def navigate_to(page: str):
+    st.session_state.page = page
+    st.rerun()
+
+
+def require_login_message():
+    if client() is not None and not using_cloud():
+        st.warning("Log in first if you want this saved to your account.")
+
+
+def profile_summary(profile: Dict):
+    st.markdown("### Saved skin profile")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        card("Skin type", profile.get("skin_type", "Not set"))
+        card("Skin concerns", ", ".join(profile.get("concerns", [])) or "Not set")
+
+    with col2:
+        card("Sensitivities", ", ".join(profile.get("sensitivities", [])) or "Not set")
+        card("Product preferences", ", ".join(profile.get("preferences", [])) or "Not set")
+
+    card("Avoid ingredients", ", ".join(profile.get("avoid_ingredients", [])) or "Not set")
+
+
+def show_ingredient_list(details: pd.DataFrame):
+    if details.empty:
+        st.write("No ingredients available for this product yet.")
+        return
+
+    for _, row in details.sort_values("ingredient_order").iterrows():
+        ingredient_name = row.get("ingredient_name", "")
+        category = row.get("ingredient_category", row.get("category", ""))
+        benefits = row.get("benefits", "")
+        concerns = row.get("possible_concerns", "")
+        flags = row.get("flags", "")
+
+        card(
+            f'{row.get("ingredient_order", "")}. {ingredient_name}',
+            f"Category: {category}\nBenefits: {benefits}\nPossible concerns: {concerns}\nFlags: {flags}",
+        )
+
+
+def show_risk_breakdown(risk: pd.DataFrame):
+    if risk.empty:
+        st.write("No ingredient notes available yet.")
+        return
+
+    for _, row in risk.sort_values("ingredient_order").iterrows():
+        level = str(row.get("risk_level", "Neutral"))
+
+        badge_type = "neutral"
+        if level == "Helpful":
+            badge_type = "good"
+        elif level == "Watch":
+            badge_type = "watch"
+        elif level == "High caution":
+            badge_type = "risk"
+
+        badge(
+            f'{row.get("ingredient", "")} · {level} · {row.get("score_impact", 0)}',
+            badge_type,
+        )
+        st.caption(str(row.get("reasons", "")))
+
+
+def show_product_result(product: pd.Series, result: Dict):
+    left, right = st.columns([2, 1])
+
+    with left:
+        product_title(product)
+
+        st.markdown("#### Why it may suit you")
+        for item in result["positives"]:
+            badge(item, "good")
+
+        st.markdown("#### Things to watch")
+        for item in result["cautions"]:
+            badge(item, "watch")
+
+    with right:
+        score_card(result["score"])
+
+    with st.expander("Ingredient list"):
+        show_ingredient_list(result["ingredient_details"])
+
+    with st.expander("Ingredient notes"):
+        show_risk_breakdown(result["risk_breakdown"])
+
+
+def show_recommendations(limit: int = 5):
+    products = get_products()
+    ingredients = get_ingredients()
+    product_ingredients = get_product_ingredients()
+    profile = load_current_profile()
+    reactions = load_current_reactions()
+
+    ranked = recommend_products(
+        products,
+        profile,
+        reactions,
+        product_ingredients,
+        ingredients,
+        user_id=current_user_id(),
     )
 
+    if ranked.empty:
+        st.info("No recommendations available yet.")
+        return
 
-def load_current_reactions() -> pd.DataFrame:
-    return load_reactions(
-        current_user_id(),
-        client=client(),
-        use_cloud=using_cloud(),
-    )
+    st.markdown("### Recommendations")
+
+    for _, product in ranked.head(limit).iterrows():
+        col1, col2 = st.columns([3, 1])
+
+        with col1:
+            card(
+                f'{product.get("brand", "")} {product.get("name", "")}',
+                f'{product.get("category", "")}\n{product.get("why", "")}\n{product.get("watch_out", "")}',
+            )
+
+        with col2:
+            score_card(int(product.get("match_score", 0)))
 
 
 def home_page():
@@ -481,39 +645,52 @@ def home_page():
             "Skin profile",
             "Save skin type, concerns, sensitivities, preferences, and ingredients you want to avoid.",
         )
+        if st.button("Open skin profile"):
+            navigate_to("Skin Profile")
 
     with col2:
         card(
             "Product matching",
-            "Search Korean skincare products and see why each product may or may not fit your profile.",
+            "Search Korean skincare products, check ingredient notes, and compare products side by side.",
         )
+        if st.button("Search products"):
+            navigate_to("Product Search")
 
     with col3:
         card(
             "Reaction history",
             "Log products that worked or caused irritation so future recommendations can adjust.",
         )
+        if st.button("View reactions"):
+            navigate_to("Reactions")
 
     st.info(
-        "This is a student portfolio prototype using simplified demo data. It does not diagnose skin conditions or allergies."
-    )
-
-    st.markdown("### Suggested test flow")
-    st.write(
-        "Start with **Login**, then save a **Skin Profile**, search a product, compare two products, and generate a routine."
+        "This is a student portfolio prototype. It does not diagnose skin conditions or allergies."
     )
 
 
 def login_page():
-    show_header()
-    st.markdown("### Login")
+    show_header(show_subtitle=False)
+    st.markdown("## Login")
 
     cloud_client = client()
 
-    if using_cloud():
-        st.success(f"Signed in as {st.session_state.user_email}")
+    if cloud_client is None:
+        st.error("Supabase is not connected yet. Add your project URL and publishable key in `.streamlit/secrets.toml`.")
+        st.code(
+            """
+[supabase]
+url = "https://YOUR-PROJECT-REF.supabase.co"
+anon_key = "YOUR-PUBLISHABLE-KEY"
+            """.strip(),
+            language="toml",
+        )
+        return
 
-        if st.button("Sign out"):
+    if using_cloud():
+        st.success(f"You are logged in as {st.session_state.user_email}.")
+
+        if st.button("Log out"):
             try:
                 cloud_client.auth.sign_out()
             except Exception:
@@ -522,83 +699,47 @@ def login_page():
             st.session_state.use_cloud = False
             st.session_state.is_authenticated = False
             st.session_state.user_id = LOCAL_DEMO_USER
-            st.session_state.user_email = "Local demo user"
+            st.session_state.user_email = "Guest"
             st.session_state.access_token = None
             st.session_state.refresh_token = None
-            st.success("Signed out. The app is now using local demo mode.")
+            st.session_state.profile_edit_mode = True
             st.rerun()
 
         return
 
-    local_col, cloud_col = st.columns(2)
+    is_login = st.session_state.auth_view == "login"
 
-    with local_col:
-        card(
-            "Local demo",
-            "Use this while building the project. Profile and reaction data are saved into local CSV files.",
-        )
-
-        if st.button("Use local demo mode"):
-            st.session_state.use_cloud = False
-            st.session_state.is_authenticated = False
-            st.session_state.user_id = LOCAL_DEMO_USER
-            st.session_state.user_email = "Local demo user"
-            st.session_state.access_token = None
-            st.session_state.refresh_token = None
-            st.success("Using local demo mode.")
-            st.rerun()
-
-    with cloud_col:
-        card(
-            "Cloud account",
-            "Use this after Supabase is connected. Profile and reaction data are saved under the signed-in user.",
-        )
-
-    if cloud_client is None:
-        st.warning(
-            "Supabase is not connected yet. Create `.streamlit/secrets.toml` with your Supabase URL and anon key."
-        )
-        st.code(
-            """
-[supabase]
-url = "https://YOUR-PROJECT-REF.supabase.co"
-anon_key = "YOUR-SUPABASE-ANON-KEY"
-            """.strip(),
-            language="toml",
-        )
-        return
-
-    st.markdown("### Supabase login")
-
-    auth_mode = st.radio("Choose action", ["Sign in", "Sign up"], horizontal=True)
+    st.markdown(f"### {'Login' if is_login else 'Sign in'}")
 
     email = st.text_input("Email", placeholder="you@example.com")
     password = st.text_input("Password", type="password")
 
-    if st.button(auth_mode):
+    action_label = "Login" if is_login else "Sign in"
+
+    if st.button(action_label):
         if not email or not password:
             st.error("Enter both email and password.")
             return
 
         try:
-            if auth_mode == "Sign up":
+            if is_login:
+                response = cloud_client.auth.sign_in_with_password(
+                    {"email": email, "password": password}
+                )
+            else:
                 response = cloud_client.auth.sign_up(
                     {"email": email, "password": password}
                 )
 
-                if response.session is None:
-                    st.info(
-                        "Account created. If email confirmation is turned on in Supabase, confirm your email first, then sign in."
-                    )
-                    return
+            if response.user is None:
+                st.error("Something went wrong. Please try again.")
+                return
 
-            else:
-                response = cloud_client.auth.sign_in_with_password(
-                    {"email": email, "password": password}
+            if response.session is None:
+                st.info(
+                    "Account created. If email confirmation is turned on, confirm your email first, then come back and log in."
                 )
-
-            if response.user is None or response.session is None:
-                st.error("Login did not return an active session.")
+                st.session_state.auth_view = "login"
                 return
 
             cloud_client.auth.set_session(
@@ -612,30 +753,62 @@ anon_key = "YOUR-SUPABASE-ANON-KEY"
             st.session_state.user_email = response.user.email or email
             st.session_state.access_token = response.session.access_token
             st.session_state.refresh_token = response.session.refresh_token
+            st.session_state.profile_edit_mode = True
 
-            st.success(f"Signed in as {st.session_state.user_email}")
+            st.success(f"Logged in as {st.session_state.user_email}.")
             st.rerun()
 
-        except Exception as exc:
-            st.error(f"Login error: {exc}")
+        except Exception:
+            if is_login:
+                st.error(
+                    "Login failed. Check that the account exists, the password is correct, and the email has been confirmed if confirmation is enabled."
+                )
+            else:
+                st.error(
+                    "Sign in failed. The email may already be registered, or email confirmation may be required."
+                )
+
+    if is_login:
+        if st.button("Need an account? Sign in!"):
+            st.session_state.auth_view = "sign_in"
+            st.rerun()
+    else:
+        if st.button("Have an account with us? Login!"):
+            st.session_state.auth_view = "login"
+            st.rerun()
 
 
 def skin_profile_page():
     show_header()
     st.markdown("### Skin profile")
 
+    require_login_message()
+
     profile = normalize_profile(load_current_profile())
 
-    skin_type = st.selectbox(
-        "Skin type",
-        ["Dry", "Oily", "Combination", "Normal", "Dehydrated", "Not sure"],
-        index=["Dry", "Oily", "Combination", "Normal", "Dehydrated", "Not sure"].index(
-            profile.get("skin_type", "Combination")
-        )
-        if profile.get("skin_type", "Combination")
-        in ["Dry", "Oily", "Combination", "Normal", "Dehydrated", "Not sure"]
-        else 2,
+    if st.session_state.profile_just_saved:
+        st.success("Profile saved.")
+        st.session_state.profile_just_saved = False
+
+    if not st.session_state.profile_edit_mode:
+        profile_summary(profile)
+
+        if st.button("Edit profile"):
+            st.session_state.profile_edit_mode = True
+            st.rerun()
+
+        show_recommendations(limit=5)
+        return
+
+    skin_type_options = ["Dry", "Oily", "Combination", "Normal", "Dehydrated", "Not sure"]
+    current_skin_type = profile.get("skin_type", "Combination")
+    skin_type_index = (
+        skin_type_options.index(current_skin_type)
+        if current_skin_type in skin_type_options
+        else 2
     )
+
+    skin_type = st.selectbox("Skin type", skin_type_options, index=skin_type_index)
 
     concern_options = [
         "acne",
@@ -675,9 +848,7 @@ def skin_profile_page():
     concerns = st.multiselect(
         "Skin concerns",
         concern_options,
-        default=[
-            item for item in profile.get("concerns", []) if item in concern_options
-        ],
+        default=[item for item in profile.get("concerns", []) if item in concern_options],
     )
 
     sensitivities = st.multiselect(
@@ -694,7 +865,9 @@ def skin_profile_page():
         "Product preferences",
         preference_options,
         default=[
-            item for item in profile.get("preferences", []) if item in preference_options
+            item
+            for item in profile.get("preferences", [])
+            if item in preference_options
         ],
     )
 
@@ -704,13 +877,13 @@ def skin_profile_page():
         help="Example: fragrance, alcohol denat., shea butter",
     )
 
-    avoid_ingredients = [
-        item.strip()
-        for item in avoid_text.split(",")
-        if item.strip()
-    ]
+    avoid_ingredients = [item.strip() for item in avoid_text.split(",") if item.strip()]
 
     if st.button("Save profile"):
+        if client() is not None and not using_cloud():
+            st.error("Please log in first so the profile can be saved to your account.")
+            return
+
         updated_profile = {
             "skin_type": skin_type,
             "concerns": concerns,
@@ -726,7 +899,9 @@ def skin_profile_page():
             use_cloud=using_cloud(),
         )
 
-        st.success("Profile saved.")
+        st.session_state.profile_edit_mode = False
+        st.session_state.profile_just_saved = True
+        st.rerun()
 
 
 def product_search_page():
@@ -739,470 +914,290 @@ def product_search_page():
     profile = load_current_profile()
     reactions = load_current_reactions()
 
-    search = st.text_input(
-        "Search by product, brand, category, or barcode",
-        placeholder="Example: sunscreen, Anua, 880000000001",
-    )
+    search_tab, compare_tab = st.tabs(["Search product", "Compare products"])
 
-    filtered = products.copy()
-
-    if search:
-        search_lower = search.lower()
-
-        filtered = products[
-            products.apply(
-                lambda row: search_lower
-                in " ".join(
-                    [
-                        str(row.get("brand", "")),
-                        str(row.get("name", "")),
-                        str(row.get("category", "")),
-                        str(row.get("barcode", "")),
-                    ]
-                ).lower(),
-                axis=1,
-            )
-        ]
-
-    if filtered.empty:
-        st.warning("No product found.")
-        return
-
-    options = get_product_options(filtered)
-    selected = st.selectbox("Choose product", options)
-
-    product = product_from_option(filtered, selected)
-    result = score_product(
-        product,
-        profile,
-        reactions,
-        product_ingredients,
-        ingredients,
-        user_id=current_user_id(),
-    )
-
-    left, right = st.columns([2, 1])
-
-    with left:
-        product_title(product)
-
-        st.markdown("#### Why it may suit you")
-        for item in result["positives"]:
-            badge(item, "good")
-
-        st.markdown("#### Things to watch")
-        for item in result["cautions"]:
-            badge(item, "watch")
-
-    with right:
-        score_card(result["score"])
-
-    with st.expander("Ingredient list"):
-        details = result["ingredient_details"]
-
-        if details.empty:
-            st.write("No ingredients available for this product yet.")
-        else:
-            st.dataframe(
-                details[
-                    [
-                        "ingredient_order",
-                        "ingredient_name",
-                        "category",
-                        "benefits",
-                        "possible_concerns",
-                        "flags",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-    with st.expander("Ingredient notes"):
-        risk = result["risk_breakdown"]
-
-        if risk.empty:
-            st.write("No ingredient notes available.")
-        else:
-            st.dataframe(
-                risk[
-                    [
-                        "ingredient_order",
-                        "ingredient",
-                        "risk_level",
-                        "score_impact",
-                        "reasons",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-
-def ingredient_risk_page():
-    show_header()
-    st.markdown("### Ingredient risk notes")
-
-    products = get_products()
-    ingredients = get_ingredients()
-    product_ingredients = get_product_ingredients()
-    profile = load_current_profile()
-    reactions = load_current_reactions()
-
-    selected = st.selectbox("Choose product", get_product_options(products))
-    product = product_from_option(products, selected)
-
-    product_title(product)
-
-    breakdown = ingredient_risk_breakdown(
-        product,
-        profile,
-        reactions,
-        product_ingredients,
-        ingredients,
-        user_id=current_user_id(),
-    )
-
-    if breakdown.empty:
-        st.write("No ingredient notes available.")
-        return
-
-    high = breakdown[breakdown["risk_level"] == "High caution"]
-    watch = breakdown[breakdown["risk_level"] == "Watch"]
-    helpful = breakdown[breakdown["risk_level"] == "Helpful"]
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        score_card(len(high), "high caution ingredients")
-
-    with col2:
-        score_card(len(watch), "watch ingredients")
-
-    with col3:
-        score_card(len(helpful), "helpful ingredients")
-
-    st.dataframe(
-        breakdown[
-            [
-                "ingredient_order",
-                "ingredient",
-                "risk_level",
-                "score_impact",
-                "reasons",
-            ]
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
-def product_comparison_page():
-    show_header()
-    st.markdown("### Product comparison")
-
-    products = get_products()
-    ingredients = get_ingredients()
-    product_ingredients = get_product_ingredients()
-    profile = load_current_profile()
-    reactions = load_current_reactions()
-
-    options = get_product_options(products)
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        first_option = st.selectbox("First product", options, key="first_product")
-
-    with col2:
-        second_option = st.selectbox(
-            "Second product",
-            options,
-            index=1 if len(options) > 1 else 0,
-            key="second_product",
+    with search_tab:
+        search = st.text_input(
+            "Search by product, brand, category, or barcode",
+            placeholder="Example: sunscreen, Anua, 8801000000011",
         )
 
-    first = product_from_option(products, first_option)
-    second = product_from_option(products, second_option)
+        filtered = products.copy()
 
-    first_result = score_product(
-        first,
+        if search:
+            search_lower = search.lower()
+
+            filtered = products[
+                products.apply(
+                    lambda row: search_lower
+                    in " ".join(
+                        [
+                            str(row.get("brand", "")),
+                            str(row.get("name", "")),
+                            str(row.get("category", "")),
+                            str(row.get("barcode", "")),
+                        ]
+                    ).lower(),
+                    axis=1,
+                )
+            ]
+
+        if filtered.empty:
+            st.warning("No product found.")
+            return
+
+        selected = st.selectbox("Choose product", get_product_options(filtered))
+        product = product_from_option(filtered, selected)
+
+        result = score_product(
+            product,
+            profile,
+            reactions,
+            product_ingredients,
+            ingredients,
+            user_id=current_user_id(),
+        )
+
+        show_product_result(product, result)
+
+    with compare_tab:
+        options = get_product_options(products)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            first_option = st.selectbox("First product", options, key="first_product")
+
+        with col2:
+            second_option = st.selectbox(
+                "Second product",
+                options,
+                index=1 if len(options) > 1 else 0,
+                key="second_product",
+            )
+
+        first = product_from_option(products, first_option)
+        second = product_from_option(products, second_option)
+
+        first_result = score_product(
+            first,
+            profile,
+            reactions,
+            product_ingredients,
+            ingredients,
+            user_id=current_user_id(),
+        )
+
+        second_result = score_product(
+            second,
+            profile,
+            reactions,
+            product_ingredients,
+            ingredients,
+            user_id=current_user_id(),
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            product_title(first)
+            score_card(first_result["score"])
+
+            st.markdown("#### Pros")
+            for item in first_result["positives"][:3]:
+                badge(item, "good")
+
+            st.markdown("#### Cautions")
+            for item in first_result["cautions"][:3]:
+                badge(item, "watch")
+
+        with col2:
+            product_title(second)
+            score_card(second_result["score"])
+
+            st.markdown("#### Pros")
+            for item in second_result["positives"][:3]:
+                badge(item, "good")
+
+            st.markdown("#### Cautions")
+            for item in second_result["cautions"][:3]:
+                badge(item, "watch")
+
+        first_ingredients = set(
+            first_result["ingredient_details"]["ingredient_name"].dropna().tolist()
+        )
+
+        second_ingredients = set(
+            second_result["ingredient_details"]["ingredient_name"].dropna().tolist()
+        )
+
+        overlap = sorted(first_ingredients.intersection(second_ingredients))
+
+        st.markdown("### Ingredient overlap")
+
+        if overlap:
+            st.write(", ".join(overlap))
+        else:
+            st.write("No overlapping ingredients found in the current dataset.")
+
+        if first_result["score"] > second_result["score"]:
+            st.success(
+                f'{first["brand"]} {first["name"]} is the better match for the current profile.'
+            )
+        elif second_result["score"] > first_result["score"]:
+            st.success(
+                f'{second["brand"]} {second["name"]} is the better match for the current profile.'
+            )
+        else:
+            st.info("Both products have the same match score for the current profile.")
+
+
+def routine_step_card(step_name: str, categories: List[str]):
+    products = get_products()
+    ingredients = get_ingredients()
+    product_ingredients = get_product_ingredients()
+    profile = load_current_profile()
+    reactions = load_current_reactions()
+
+    chosen = best_product_for_category(
+        categories,
+        products,
         profile,
         reactions,
         product_ingredients,
         ingredients,
-        user_id=current_user_id(),
+        current_user_id(),
     )
 
-    second_result = score_product(
-        second,
-        profile,
-        reactions,
-        product_ingredients,
-        ingredients,
-        user_id=current_user_id(),
-    )
+    if chosen is None:
+        card(step_name, "No product available for this step yet.")
+        return
 
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([3, 1])
 
     with col1:
-        product_title(first)
-        score_card(first_result["score"])
-        st.markdown("#### Pros")
-        for item in first_result["positives"][:3]:
-            badge(item, "good")
-
-        st.markdown("#### Cautions")
-        for item in first_result["cautions"][:3]:
-            badge(item, "watch")
+        card(
+            f'{step_name}: {chosen.get("brand", "")} {chosen.get("name", "")}',
+            f'{chosen.get("category", "")}\n{chosen.get("why", "")}\n{chosen.get("watch_out", "")}',
+        )
 
     with col2:
-        product_title(second)
-        score_card(second_result["score"])
-        st.markdown("#### Pros")
-        for item in second_result["positives"][:3]:
-            badge(item, "good")
-
-        st.markdown("#### Cautions")
-        for item in second_result["cautions"][:3]:
-            badge(item, "watch")
-
-    first_ingredients = set(
-        first_result["ingredient_details"]["ingredient_name"].dropna().tolist()
-    )
-
-    second_ingredients = set(
-        second_result["ingredient_details"]["ingredient_name"].dropna().tolist()
-    )
-
-    overlap = sorted(first_ingredients.intersection(second_ingredients))
-
-    st.markdown("### Ingredient overlap")
-
-    if overlap:
-        st.write(", ".join(overlap))
-    else:
-        st.write("No overlapping ingredients found in the current dataset.")
-
-    if first_result["score"] > second_result["score"]:
-        st.success(f'{first["brand"]} {first["name"]} is the better match for the current profile.')
-    elif second_result["score"] > first_result["score"]:
-        st.success(f'{second["brand"]} {second["name"]} is the better match for the current profile.')
-    else:
-        st.info("Both products have the same match score for the current profile.")
+        score_card(int(chosen.get("match_score", 0)))
 
 
 def routine_builder_page():
     show_header()
     st.markdown("### Routine builder")
 
+    morning_steps = [
+        ("Cleanser", ["Cleanser"]),
+        ("Toner", ["Toner", "Toner Pad"]),
+        ("Serum or essence", ["Serum", "Essence", "Ampoule"]),
+        ("Moisturiser", ["Moisturiser"]),
+        ("Sunscreen", ["Sunscreen"]),
+    ]
+
+    night_steps = [
+        ("First cleanse", ["Oil Cleanser"]),
+        ("Second cleanse", ["Cleanser"]),
+        ("Toner", ["Toner", "Toner Pad"]),
+        ("Treatment or serum", ["Treatment", "Serum", "Essence", "Ampoule", "Exfoliant"]),
+        ("Moisturiser", ["Moisturiser"]),
+    ]
+
+    morning_tab, night_tab = st.tabs(["Morning routine", "Night routine"])
+
+    with morning_tab:
+        st.info("Morning routine focuses on hydration, barrier support, and sunscreen.")
+
+        for step_name, categories in morning_steps:
+            routine_step_card(step_name, categories)
+
+    with night_tab:
+        st.info("Night routine focuses on cleansing, treatment, and barrier support.")
+
+        for step_name, categories in night_steps:
+            routine_step_card(step_name, categories)
+
+
+def reactions_page():
+    show_header()
+    st.markdown("### Reactions")
+
+    require_login_message()
+
     products = get_products()
-    ingredients = get_ingredients()
-    product_ingredients = get_product_ingredients()
-    profile = load_current_profile()
-    reactions = load_current_reactions()
 
-    routine_type = st.radio(
-        "Routine type",
-        ["Minimal", "Balanced", "Full"],
-        horizontal=True,
-    )
+    log_tab, history_tab = st.tabs(["Log reaction", "Reaction history"])
 
-    if routine_type == "Minimal":
-        steps = [
-            ("Cleanser", ["Cleanser"]),
-            ("Moisturiser", ["Moisturiser", "Cream"]),
-            ("Sunscreen", ["Sunscreen"]),
-        ]
-    elif routine_type == "Balanced":
-        steps = [
-            ("Cleanser", ["Cleanser"]),
-            ("Toner", ["Toner"]),
-            ("Serum or essence", ["Serum", "Essence"]),
-            ("Moisturiser", ["Moisturiser", "Cream"]),
-            ("Sunscreen", ["Sunscreen"]),
-        ]
-    else:
-        steps = [
-            ("Cleanser", ["Cleanser"]),
-            ("Toner", ["Toner"]),
-            ("Essence", ["Essence"]),
-            ("Serum", ["Serum"]),
-            ("Moisturiser", ["Moisturiser", "Cream"]),
-            ("Sunscreen", ["Sunscreen"]),
-        ]
+    with log_tab:
+        selected = st.selectbox("Product", get_product_options(products))
+        product = product_from_option(products, selected)
 
-    st.info(
-        "This routine is based on the current demo dataset. It is meant as a project feature, not skincare advice."
-    )
-
-    for step_name, categories in steps:
-        chosen = best_product_for_category(
-            categories,
-            products,
-            profile,
-            reactions,
-            product_ingredients,
-            ingredients,
-            current_user_id(),
+        reaction_result = st.radio(
+            "How did your skin react?",
+            ["Good", "Neutral", "Bad"],
+            horizontal=True,
         )
 
-        if chosen is None:
-            card(step_name, "No product available for this step yet.")
-            continue
-
-        st.markdown(f"### {step_name}")
-
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            st.markdown(
-                f"""
-                <div class="skin-card">
-                    <h3>{chosen.get("brand", "")} {chosen.get("name", "")}</h3>
-                    <div class="muted-text">
-                        {chosen.get("category", "")}<br>
-                        {chosen.get("why", "")}<br>
-                        {chosen.get("watch_out", "")}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        with col2:
-            score_card(int(chosen.get("match_score", 0)))
-
-
-def reaction_logger_page():
-    show_header()
-    st.markdown("### Reaction logger")
-
-    products = get_products()
-
-    selected = st.selectbox("Product", get_product_options(products))
-    product = product_from_option(products, selected)
-
-    reaction_result = st.radio(
-        "How did your skin react?",
-        ["Good", "Neutral", "Bad"],
-        horizontal=True,
-    )
-
-    reaction_type = st.selectbox(
-        "Reaction type",
-        [
-            "No issue",
-            "Redness",
-            "Burning",
-            "Itching",
-            "Dryness",
-            "Breakout",
-            "Closed comedones",
-            "Eye stinging",
-            "Other",
-        ],
-    )
-
-    severity = st.slider("Severity", 1, 5, 3)
-    notes = st.text_area("Notes", placeholder="Example: stung around my eyes after 2 days")
-
-    if st.button("Save reaction"):
-        save_user_reaction(
-            current_user_id(),
-            int(product["product_id"]),
-            reaction_result,
-            reaction_type,
-            severity,
-            notes,
-            client=client(),
-            use_cloud=using_cloud(),
-        )
-
-        st.success("Reaction saved.")
-
-
-def recommendations_page():
-    show_header()
-    st.markdown("### Recommendations")
-
-    products = get_products()
-    ingredients = get_ingredients()
-    product_ingredients = get_product_ingredients()
-    profile = load_current_profile()
-    reactions = load_current_reactions()
-
-    ranked = recommend_products(
-        products,
-        profile,
-        reactions,
-        product_ingredients,
-        ingredients,
-        user_id=current_user_id(),
-    )
-
-    if ranked.empty:
-        st.warning("No recommendations available yet.")
-        return
-
-    top_n = st.slider("Number of products", 3, 10, 5)
-    ranked = ranked.head(top_n)
-
-    for _, product in ranked.iterrows():
-        col1, col2 = st.columns([3, 1])
-
-        with col1:
-            st.markdown(
-                f"""
-                <div class="skin-card">
-                    <h3>{product.get("brand", "")} {product.get("name", "")}</h3>
-                    <div class="muted-text">
-                        {product.get("category", "")}<br>
-                        {product.get("why", "")}<br>
-                        {product.get("watch_out", "")}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        with col2:
-            score_card(int(product.get("match_score", 0)))
-
-
-def reaction_history_page():
-    show_header()
-    st.markdown("### Reaction history")
-
-    products = get_products()
-    reactions = load_current_reactions()
-
-    if reactions.empty:
-        st.info("No reactions saved yet.")
-        return
-
-    display = reactions.merge(
-        products[["product_id", "brand", "name", "category"]],
-        on="product_id",
-        how="left",
-    )
-
-    st.dataframe(
-        display[
+        reaction_type = st.selectbox(
+            "Reaction type",
             [
-                "date_added",
-                "brand",
-                "name",
-                "category",
-                "reaction_result",
-                "reaction_type",
-                "severity",
-                "notes",
-            ]
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
+                "No issue",
+                "Redness",
+                "Burning",
+                "Itching",
+                "Dryness",
+                "Breakout",
+                "Closed comedones",
+                "Eye stinging",
+                "Other",
+            ],
+        )
+
+        severity = st.slider("Severity", 1, 5, 3)
+
+        notes = st.text_area(
+            "Notes",
+            placeholder="Example: stung around my eyes after 2 days",
+        )
+
+        if st.button("Save reaction"):
+            if client() is not None and not using_cloud():
+                st.error("Please log in first so the reaction can be saved to your account.")
+                return
+
+            save_user_reaction(
+                current_user_id(),
+                int(product["product_id"]),
+                reaction_result,
+                reaction_type,
+                severity,
+                notes,
+                client=client(),
+                use_cloud=using_cloud(),
+            )
+
+            st.success("Reaction saved.")
+
+    with history_tab:
+        reactions = load_current_reactions()
+
+        if reactions.empty:
+            st.info("No reactions saved yet.")
+            return
+
+        display = reactions.merge(
+            products[["product_id", "brand", "name", "category"]],
+            on="product_id",
+            how="left",
+        )
+
+        for _, row in display.iterrows():
+            card(
+                f'{row.get("brand", "")} {row.get("name", "")}',
+                f'Date: {row.get("date_added", "")}\nCategory: {row.get("category", "")}\nReaction: {row.get("reaction_result", "")} · {row.get("reaction_type", "")} · Severity {row.get("severity", "")}/5\nNotes: {row.get("notes", "")}',
+            )
 
 
 def sidebar_navigation() -> str:
@@ -1210,29 +1205,31 @@ def sidebar_navigation() -> str:
     st.sidebar.caption("Streamlit prototype for a Korean skincare recommender.")
 
     st.sidebar.markdown("---")
-
-    st.sidebar.write(f"User: **{st.session_state.get('user_email', 'Local demo user')}**")
-
-    mode = "Cloud / Supabase" if using_cloud() else "Local CSV"
-    st.sidebar.write(f"Storage: **{mode}**")
-
+    st.sidebar.write(f"User: **{st.session_state.get('user_email', 'Guest')}**")
     st.sidebar.markdown("---")
 
-    return st.sidebar.radio(
-        "Pages",
-        [
-            "Home",
-            "Login",
-            "Skin Profile",
-            "Product Search",
-            "Ingredient Risk",
-            "Product Comparison",
-            "Routine Builder",
-            "Reaction Logger",
-            "Recommendations",
-            "Reaction History",
-        ],
-    )
+    pages = [
+        "Home",
+        "Login",
+        "Skin Profile",
+        "Product Search",
+        "Routine Builder",
+        "Reactions",
+    ]
+
+    for page in pages:
+        if st.session_state.page == page:
+            st.sidebar.markdown(
+                f'<div class="nav-active">{safe_text(page)}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            if st.sidebar.button(page, key=f"nav_{page}"):
+                st.session_state.page = page
+                st.rerun()
+
+    return st.session_state.page
+
 
 def main():
     init_session_state()
@@ -1247,18 +1244,10 @@ def main():
         skin_profile_page()
     elif page == "Product Search":
         product_search_page()
-    elif page == "Ingredient Risk":
-        ingredient_risk_page()
-    elif page == "Product Comparison":
-        product_comparison_page()
     elif page == "Routine Builder":
         routine_builder_page()
-    elif page == "Reaction Logger":
-        reaction_logger_page()
-    elif page == "Recommendations":
-        recommendations_page()
-    elif page == "Reaction History":
-        reaction_history_page()
+    elif page == "Reactions":
+        reactions_page()
 
 
 if __name__ == "__main__":
