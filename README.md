@@ -110,11 +110,13 @@ docs/VSCODE_GIT_WORKFLOW.md
 
 ## Project Background
 
-I came up with the idea for Wednesday Skinmatch from my experience working as a beauty advisor in retail. Many customers were interested in Korean skincare, but they were also unsure about whether certain products would suit their skin type, sensitivities, or previous irritation history.
+I am aware that Wednesday Skinmatch is still a simple prototype, but building it helped me learn a lot. Through this project, I practiced turning an idea into a working app, designing features around real user needs, handling data, building recommendation logic, improving the UI, connecting cloud storage, and using Git/GitHub more confidently.
 
-I wanted to build a prototype that reflects that kind of real customer concern. Instead of only showing product information, the app uses a user's skin profile and reaction history to make more personalised and explainable recommendations.
+The idea came from my experience working as a beauty advisor in retail, where I often saw customers feeling unsure about whether certain skincare products would suit their skin type, sensitivities, or previous irritation history. I wanted to create something that reflects that kind of real customer concern, even in a simple prototype form.
 
-This project took around 2–3 weeks to research, build, test, and improve. It was a useful learning experience because I worked through the full process of planning the idea, designing the data structure, building the recommendation logic, connecting authentication and cloud storage, improving the UI, fixing bugs, using Git/GitHub, and deploying the app.
+This project took around 2–3 weeks including research, coding, testing, debugging, and improving the interface. It was worth the progress because it made me more confident with building projects independently and gave me more ideas for future applications.
+
+I am looking forward to improving this project further and also starting my next project with the skills and creativity I gained from building Wednesday Skinmatch.
 
 ## Future improvements
 
